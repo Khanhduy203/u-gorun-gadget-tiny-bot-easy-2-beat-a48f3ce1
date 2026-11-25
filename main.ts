@@ -37,6 +37,7 @@ interface SymState {
   emaSlow: number;
   peak: number; // highest close seen since entry (0 when flat)
   entrySeq: number; // batch seq the current position was first seen (-1 flat)
+  lastSeq: number; // batch seq of the most recent bar folded for this symbol
 }
 
 const perSymbol = new Map<string, SymState>();
@@ -44,7 +45,7 @@ const perSymbol = new Map<string, SymState>();
 function stateFor(symbol: string): SymState {
   let s = perSymbol.get(symbol);
   if (s === undefined) {
-    s = { closes: [], emaFast: 0, emaSlow: 0, peak: 0, entrySeq: -1 };
+    s = { closes: [], emaFast: 0, emaSlow: 0, peak: 0, entrySeq: -1, lastSeq: -1 };
     perSymbol.set(symbol, s);
   }
   return s;
@@ -73,6 +74,7 @@ await runBars({
       const p = priceUsd(state, symbol);
       if (p === null || !(p > 0)) continue;
       const s = stateFor(symbol);
+      s.lastSeq = state.seq;
       s.closes.push(p);
       if (s.closes.length === 1) {
         s.emaFast = p;
@@ -116,6 +118,9 @@ await runBars({
         if (state.positions.has(symbol)) continue;
         const s = stateFor(symbol);
         if (s.closes.length < SLOW_LEN) continue; // need a settled slow EMA
+        // Skip symbols whose bars have gone stale: never enter on a trend
+        // computed from prices that stopped arriving (dead pool / halted feed).
+        if (state.seq - s.lastSeq > 2) continue;
         if (s.emaFast <= s.emaSlow) continue;
         const n = s.closes.length;
         const mom = s.closes[n - 1] / s.closes[n - 1 - MOM_LEN] - 1;
